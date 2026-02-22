@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stoplight</title>
+    <style>
+        body{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #content{
+            display: flex;
+            flex-direction: column;
+            align-items: left;
+            max-width: fit-content;
+        }
+        .title{
+            align-self: center;
+            text-align: center;
+            align-items: center;
+        }
+        #debugDiv{
+            display: none;
+        }
+        input, select, label {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="content">
+    <h1 class="title">Stoplight</h1>
+    <h3 class="title">Current Distance</h3>
+    <div>
+    <div class="title"><span id="distance">--</span> ft</div>
+    </div>
+    <div>
+    <h3 class="title">Settings</h3>
+    <label for="threshold">Threshold:</label>
+    <input type="number" id="threshold" name="threshold" value="10">ft 
+    <br>
+    <input type="button" id="setThreshold" name="setThreshold" value="Set Threshold">
+    <input type="button" id="setCurThreshold" name="setCurThreshold" value="Set Current Distance as Threshold"> 
+    <br>
+    <label for="mode">Mode:</label>
+    <select id="mode" name="mode">
+        <option value="regular" selected>Regular</option>
+        <option value="light">Light</option>
+        <option value="select" disabled="true">Select Color</option>
+    </select>
+    <br>
+    <div id="colorDiv" style="display:none">
+    <label for="color">Color:</label>
+    <input type="color" id="color" name="color" value="#ff0000">
+    <br>
+    <input type="button" id="setColor" name="setColor" value="Set Color">
+    <input type="button" id="tryColor" name="tryColor" value="Try Color">
+    </div>
+    <label for="wifiPswd">WiFi Password:</label>
+    <input type="password" id="wifiPswd" name="wifiPswd" value="">
+    <input type="button" id="pswdVisBtn" value="Show">
+    <br>
+    <input type="button" id="setWifiPswd" name="setWifiPswd" value="Set WiFi Password">
+    <br>
+    <div id="debugDiv">
+    <label for="debug">Disable Polling</label>
+    <input type="checkbox" id="debug" name="debug" value="debug">
+    </div>
+    </div>
+    <div id="errorDiv">
+    <h3 class="title">Errors</h3>
+    </div>
+    </div>
+    <script>
+        const modeMap = {
+            "regular": 0,
+            "select": 1,
+            "light": 2
+        };
+        const featureMap = {
+            1: "color"
+        };
+        const errorMap = {
+            1: "TOF Init",
+            2: "Light Init",
+            4: "Loading From Flash"
+        };
+        let distance;
+        let debug = false;
+        let polling = false;
+        const distanceUpdateInterval = 1000; //ms
+        function setThreshold(threshold){
+            if(!Number.isInteger(threshold)){
+                alert("Threshold must be an integer value");
+                return;
+            }
+            fetch(`/set?dp=threshold&val=${threshold}`, {method: 'POST'}).then(
+                res => {
+                    if(!res.ok){
+                        alert("Failed to set threshold");
+                    }
+                }
+            );
+        }
+        function setThresholdCallback(){
+            const threshold = ftToMm(document.getElementById("threshold").value);
+            setThreshold(threshold);
+        }
+        function setCurThresholdCallback(){
+            setThreshold(distance);
+        }
+        function procColor(colorStr){
+            const color = parseInt(colorStr.replace('#', ''), 16);
+            if(!Number.isInteger(color)){
+                alert("Color must be a valid hex color");
+                return null;
+            }
+            return color;
+        }
+        function setColorCallback(){
+            const color = procColor(document.getElementById("color").value);
+            if(color !== null){
+                fetch(`/set?dp=color&val=${color}`, {method: 'POST'});
+            }
+        }
+        function tryColorCallback(){
+            const color = procColor(document.getElementById("color").value);
+            if(color !== null){
+                fetch(`/trycolor?val=${color}`, {method: 'POST'});
+            }
+        }
+        function setWifiPswdCallback(){
+            const pswd = document.getElementById("wifiPswd").value;
+            if(!isValidPassword(pswd)){
+                alert("Password must be 8-63 ASCII characters");
+                return;
+            }
+            fetch(`/set?dp=wifiPswd&val=${encodeURIComponent(pswd)}`, {method: 'POST'});
+        }
+        function isValidPassword(pswd){
+            //Add any password validation logic here
+            if(pswd.length < 8 || pswd.length > 63){
+                return false;
+            }
+            for(const char of pswd){
+                const code = char.charCodeAt(0);
+                if(code < 32 || code > 126){
+                    return false;
+                }
+            }
+            return true;
+        }
+        function intToMode(i){
+            for(const [key, val] of Object.entries(modeMap)){
+                if(val === i){
+                    return key;
+                }
+            }
+            return "regular";
+        }
+        function modeToInt(mode){
+            return modeMap[mode] || 0;
+        }
+        function setModeCallback(mode){
+            const modeInt = modeToInt(mode);
+            fetch(`/set?dp=mode&val=${modeInt}`, {method: 'POST'});
+        }
+        function pswdBtnCallback(){
+            const pswdInput = document.getElementById("wifiPswd");
+            const btn = document.getElementById("pswdVisBtn");
+            if(pswdInput.type === "password"){
+                pswdInput.type = "text";
+                btn.value = "Hide";
+            } 
+            else {
+                pswdInput.type = "password";
+                btn.value = "Show";
+            }
+        }
+        function ftToMm(ft){
+            ft = parseFloat(ft);
+            if(isNaN(ft)){
+                return "--";
+            }
+            return Math.ceil(ft * 304.8);
+        }
+        function mmToFt(mm){
+            mm = parseInt(mm);
+            if(isNaN(mm)){
+                return "--";
+            }
+            return (mm / 304.8).toFixed(2);
+        }
+        function handleFeatures(features){
+            for(const [bit, feature] of Object.entries(featureMap)){
+                const enabled = features & bit;
+                switch(feature){
+                    case "color":
+                        if(enabled){
+                            document.getElementById("colorDiv").style.display = "block";
+                            document.querySelector('#mode > option[value="select"]').disabled = false;
+                        }
+                        break;
+                }
+            }
+        }
+        function handleErrors(errors){
+            const errorDiv = document.getElementById("errorDiv");
+            for(const [bit, err] of Object.entries(errorMap)){
+                const hasError = errors & bit;
+                if(hasError){
+                    let errPara = document.createElement("p");
+                    errPara.innerText = err;
+                    errorDiv.appendChild(errPara);
+                }
+            }
+        }
+        function init(){
+            return fetch("/getall").then(
+                res => res.json().then(
+                    data => {
+                        //Initialize Values
+                        //distance = data.distance ? data.distance.val : "--";
+                        //document.getElementById("distance").innerText = mmToFt(distance);
+                        document.getElementById("threshold").value = data.threshold ? mmToFt(data.threshold.val) : "--";
+                        document.getElementById("color").value = `#${data.color ? data.color.val.toString(16).padStart(6, '0') : '000000'}`;
+                        document.getElementById("mode").value = data.mode ? intToMode(data.mode.val) : "regular";
+                        document.getElementById("debug").checked = false;
+                        document.getElementById("wifiPswd").value = data.wifiPswd ? data.wifiPswd.val : "";
+                        //Register Callbacks
+                        document.getElementById("setThreshold").onclick = setThresholdCallback;
+                        document.getElementById("setCurThreshold").onclick = setCurThresholdCallback;
+                        document.getElementById("setColor").onclick = setColorCallback;
+                        document.getElementById("tryColor").onclick = tryColorCallback;
+                        document.getElementById("mode").onchange = (event) => setModeCallback(event.target.value);
+                        document.getElementById("setWifiPswd").onclick = setWifiPswdCallback;
+                        document.getElementById("pswdVisBtn").onclick = pswdBtnCallback;
+                        document.getElementById("debug").onchange = (event) => {
+                            debug = event.target.checked;
+                            if(!debug && !polling){ updateDistance(); }
+                        };
+                        if(data.features){
+                            handleFeatures(data.features.val);
+                        }
+                        if(data.errors){
+                            handleErrors(data.errors.val);
+                        }
+                        //Start Distance Updates
+                        updateDistance();
+                    }
+                )
+            );
+        }
+        function updateDistance(){
+            fetch("/get?dp=distance").then(
+                res => res.text().then(
+                    val => {
+                        polling = true;
+                        distance = parseInt(val);
+                        document.getElementById("distance").innerText = mmToFt(distance);
+                        if(!debug){ setTimeout(updateDistance, distanceUpdateInterval); }
+                        else{ polling = false; }
+                    }
+                )
+            );
+        }
+        init();
+    </script>
+</body>
+</html>
